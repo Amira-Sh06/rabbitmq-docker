@@ -1,0 +1,64 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management-alpine # Use image with Management UI
+    container_name: rabbitmq_broker
+    ports:
+      - "5672:5672" # AMQP port for clients
+      - "15672:15672" # Port for RabbitMQ Management web interface
+    environment:
+      # These environment variables are used by RabbitMQ to set up the default user
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    healthcheck: # RabbitMQ readiness check
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s # Give RabbitMQ time to start
+
+  ic_adapter:
+    build:
+      context: . # Build context - current directory
+      dockerfile: Dockerfile_OneC # Specify which Dockerfile to use
+    container_name: ic_adapter_service
+    # Environment variables for the adapter, read via python-dotenv
+    # RABBITMQ_HOST here is 'rabbitmq' because that's the service name in docker-compose
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: guest
+      RABBITMQ_PASSWORD: guest
+      FLASK_PORT: 5000
+    ports:
+      - "5000:5000" # Expose Flask service port to the host
+    depends_on:
+      rabbitmq:
+        condition: service_healthy # Start only after RabbitMQ is healthy
+
+  dms_adapter:
+    build:
+      context: .
+      dockerfile: Dockerfile_DMS
+    container_name: dms_adapter_service
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: guest
+      RABBITMQ_PASSWORD: guest
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  crm_adapter:
+    build:
+      context: .
+      dockerfile: Dockerfile_CRM
+    container_name: crm_adapter_service
+    environment:
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: guest
+      RABBITMQ_PASSWORD: guest
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
