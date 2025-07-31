@@ -1,7 +1,8 @@
 import json
 import time
-import logging
 import os
+import logging
+import requests
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -15,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 from rabbitmq import RabbitMQClient
 
-class CRMAdapter(RabbitMQClient):
+class CreatioCRMAdapter(RabbitMQClient):
     """
     CRMAdapter handles communication between the CRM system and other services
     via RabbitMQ. It consumes messages from 'crm_queue' and publishes responses.
@@ -39,7 +40,63 @@ class CRMAdapter(RabbitMQClient):
             self.bind_queue(self.crm_queue_name, self.exchange_name, "dms.response.crm.#")
             logger.info(f"CRM Adapter is listening for messages on queue '{self.crm_queue_name}'.")
 
-    def _process_message(self, ch, method, properties, body):
+        self.creatio_url = os.getenv('CRMAdapter_creatio_url')
+        self.creatio_auth_url = os.getenv('CREATIO_AUTH_URL')
+        self.creatio_update_order_url = os.getenv('CREATIO_UPDATE_ORDER_URL')
+        self.creatio_username = os.getenv('CREATIO_USERNAME')
+        self.creatio_password = os.getenv('CREATIO_PASSWORD')
+        self.session = requests.Session()  # Use a session to save authorization
+
+def authorization(self):
+    """
+    Method
+    for authorizing in Creatio and obtaining session cookies.
+    """
+    auth_url = self.creatio_url + self.creatio_auth_url
+    headers = {'Content-Type': 'application/json'}
+    data = json.dumps({
+        "Username": self.creatio_username,
+        "UserPassword": self.creatio_password
+    })
+
+    try:
+        response = self.session.post(auth_url, headers=headers, data=data)
+        response.raise_for_status()
+        logger.info(f"CRM Adapter is responding with status code {response.status_code}")
+        return True
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to authenticate with Creatio: {e}", exc_info=True)
+        return False
+
+def _update_creatio_order_status(self, order_id, new_status):
+    """
+    Method for updating order status in Creatio via OData API.
+    """
+    if not self.session.cookies:
+        logger.warning("Creatio session expired or not authenticated. Re-authenticating...")
+        if not self._authenticate():
+            raise ConnectionError("Failed to authenticate with Creatio.")
+
+    update_url = self.creatio_update_order_url.format(order_id = order_id) + self.creatio.url
+    headers = {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json; odata.metadata=minimal',
+        'ForceUseSession': 'true'
+    }
+    data = json.dumps({
+        "Status": {"Name": new_status}  # Это пример, реальная модель данных может отличаться
+    })
+    try:
+        response = self.session.patch(update_url, data=data, headers=headers)
+        response.raise_for_status()
+        logger.info(f"Order '{order_id}' status updated to '{new_status}' in Creatio.")
+        return True, None
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to update Creatio order '{order_id}': {e}", exc_info=True)
+        return False, str(e)
+
+
+def _process_message(self, ch, method, properties, body):
         """
         Callback function to process incoming messages for the CRM adapter.
         Handles message deserialization, retries, and routing based on message type.
@@ -57,21 +114,25 @@ class CRMAdapter(RabbitMQClient):
             payload = message.get("payload")
             request_id = message.get("request_id")
 
-            # --- ACTUAL CRM SYSTEM ACTIONS ---
-            # This section would typically involve calling the real CRM system's API,
-            # writing data to its database, or interacting with its internal services.
             if message_type == "update_order_status":
                 logger.info(f"[CRM] Processing order status update from {source_system} for order: {payload.get('order_id')}")
-                try:
-                    # Simulate updating data in CRM
-                    # crm_api_client.update_order(payload['order_id'], {'status': payload['status']})
+
+                order_id = payload.get('order_id')
+                new_status = payload.get('new_status')
+
+                success, error_details = _update_creatio_order_status(payload.get('order_id'), new_status)
+
+                if success:
+                    # In the real Creatio system, we would get crm_internal_id from the response.
+                    # But for now, we are simulating it, as OData PATCH may not return a response.
                     crm_internal_id = "CRM_ORD_" + str(int(time.time()))
-                    logger.info(f"[CRM] Order '{payload.get('order_id')}' status updated in CRM.")
                     status = "success"
-                except Exception as e:
-                    logger.error(f"[CRM] Error updating order status in CRM: {e}", exc_info=True)
+                    logger.info(f"[CRM] Order '{order_id}' status updated in Creatio. CRM ID: {crm_internal_id}")
+
+                else:
                     status = "failed"
                     crm_internal_id = None
+
 
                 # Publish a response back to the source system (e.g., 1C)
                 response_message = {
