@@ -1,3 +1,4 @@
 pika
 Flask
 python-dotenv
+requests
