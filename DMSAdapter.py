@@ -1,6 +1,7 @@
 import json
 import time
 import logging
+import os
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -34,108 +35,138 @@ class DMSAdapter(RabbitMQClient):
             self.declare_queue(self.dms_queue_name, self.dms_dl_exchange, 'dms.dead_letter')
 
             # Bind the DMS queue to listen for all requests directed to DMS
-            self.bind_queue(self.dms_queue_name, self.exchange_name, "*.request.dms.#")
+            self.bind_queue(self.dms_queue_name, self.exchange_name, "1c.request.dms.#")
+            self.bind_queue(self.dms_queue_name, self.exchange_name, "crm.request.dms.#")
             logger.info(f"DMS Adapter is listening for messages on queue '{self.dms_queue_name}'.")
+
+    def _create_user_in_dms(self, user_payload):
+        """
+        Simulates creating a user in DMS.
+        In a real-world scenario, this would be an API call to the DMS system.
+        """
+        logger.info(f"Simulating user creation in DMS for payload: {user_payload}")
+        time.sleep(2)  # Simulate a 2-second delay
+
+        # In a real-world scenario, a requests.post() would be here.
+        # Example: response = requests.post(dms_api_url, json=user_payload)
+
+        # Simulate a successful response
+        dms_user_id = f"DMS-USER-{int(time.time())}"
+        response = {
+            "status": "success",
+            "message": "User created successfully in DMS.",
+            "dms_user_id": dms_user_id
+        }
+        return response
+
+    def _get_policy_info_from_dms(self, policy_number):
+        """
+        Simulates getting policy information from DMS.
+        In a real-world scenario, this would be an API call to the DMS system.
+        """
+        logger.info(f"Simulating getting policy info from DMS for policy number: {policy_number}")
+        time.sleep(1)  # Simulate a 1-second delay
+
+        # In a real-world scenario, a requests.get() would be here.
+        # Example: response = requests.get(f"{dms_api_url}/policies/{policy_number}")
+
+        # Simulate a successful response
+        response = {
+            "status": "success",
+            "policy_number": policy_number,
+            "insurer_name": "Иванов Иван Иванович",
+            "policy_status": "Активный",
+            "start_date": "2025-01-01",
+            "end_date": "2026-01-01"
+        }
+        return response
 
     def _process_message(self, ch, method, properties, body):
         """
         Callback function to process incoming messages for the DMS adapter.
         Handles message deserialization, retries, and routing based on message type.
         """
-        MAX_RETRIES = 3 # Maximum number of message processing attempts
+        MAX_RETRIES = 3  # Maximum number of message processing attempts
         try:
             message = json.loads(body)
             logger.info(f"\n[DMS] Received message: {message}")
-
             retries = message.get('retries', 0)
             message['retries'] = retries + 1
-
             source_system = message.get("source_system")
             message_type = message.get("message_type")
             payload = message.get("payload")
             request_id = message.get("request_id")
 
-            # --- ACTUAL DMS SYSTEM ACTIONS ---
-            # This section would typically involve calling the real DMS system's API,
-            # writing data to its database, or interacting with its internal services.
+            if not all([source_system, message_type, payload, request_id]):
+                logger.error("Message is missing required fields. Rejecting.")
+                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+                return
+
             if message_type == "create_user":
-                logger.info(f"[DMS] Processing user creation request from {source_system} for user: {payload.get('name')}")
-                try:
-                    # Simulate calling DMS API
-                    # dms_api_client.create_user(payload)
-                    dms_internal_id = "DMS_USR_" + str(int(time.time())) # ID obtained from actual DMS
-                    logger.info(f"[DMS] User '{payload.get('name')}' successfully created in DMS with ID: {dms_internal_id}")
-                    status = "success"
-                except Exception as e:
-                    logger.error(f"[DMS] Error creating user in DMS: {e}", exc_info=True)
-                    status = "failed"
-                    dms_internal_id = None
-
-                # Publish a response back to the source system (e.g., 1C or CRM)
-                response_message = {
-                    "source_system": "DMS",
-                    "target_system": source_system, # Respond back to the requesting system
-                    "message_type": "user_created_response",
-                    "payload": {"user_id": payload.get("user_id"), "status": status, "dms_id": dms_internal_id},
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "request_id": request_id # Pass request_id back
-                }
-                self.publish_message(self.exchange_name, f"dms.response.{source_system.lower()}.user_created", response_message)
-
-            elif message_type == "get_policy_info":
-                logger.info(f"[DMS] Processing policy info request from {source_system} for policy: {payload.get('policy_number')}")
-                try:
-                    # Simulate fetching data from DMS
-                    # policy_info = dms_api_client.get_policy_details(payload['policy_number'])
-                    policy_info = {
-                        "policy_number": payload.get("policy_number"),
-                        "status": "active",
-                        "insured_name": "ООО Ромашка", # Example data
-                        "coverage_amount": 1000000.00
-                    }
-                    logger.info(f"[DMS] Retrieved policy info: {policy_info}")
-                except Exception as e:
-                    logger.error(f"[DMS] Error getting policy info from DMS: {e}", exc_info=True)
-                    policy_info = {"policy_number": payload.get("policy_number"), "status": "error", "error_details": str(e)}
-
+                response_payload = self._create_user_in_dms(payload)
                 response_message = {
                     "source_system": "DMS",
                     "target_system": source_system,
-                    "message_type": "policy_info_response",
-                    "payload": policy_info,
-                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "request_id": request_id
+                    "message_type": "user_created_response",
+                    "payload": response_payload,
+                    "request_id": request_id,
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ")
                 }
-                self.publish_message(self.exchange_name, f"dms.response.{source_system.lower()}.policy_info", response_message)
+                self.publish_response_message(response_message, f"dms.response.{source_system}.user_created")
+                ch.basic_ack(delivery_tag=method.delivery_tag)
+
+            elif message_type == "get_policy_info":
+                policy_number = payload.get("policy_number")
+                if policy_number:
+                    policy_info = self._get_policy_info_from_dms(policy_number)
+                    response_message = {
+                        "source_system": "DMS",
+                        "target_system": source_system,
+                        "message_type": "policy_info_response",
+                        "payload": policy_info,
+                        "request_id": request_id,
+                        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ")
+                    }
+                    self.publish_response_message(response_message, f"dms.response.{source_system}.policy_info_response")
+                    ch.basic_ack(delivery_tag=method.delivery_tag)
+                else:
+                    logger.error(f"Invalid payload for 'get_policy_info' message. Rejecting.")
+                    ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
             else:
-                logger.warning(f"[DMS] Unhandled message type: {message_type} from {source_system}. Rejecting message: {message}")
-                self.nack_message(method, requeue=False) # Negative acknowledgment, do not re-queue
-                return
+                logger.warning(f"Unknown message type '{message_type}'. Rejecting.")
+                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
-            self.acknowledge_message(method) # Acknowledge successful processing
-
-        except json.JSONDecodeError:
-            logger.error(f"[DMS] Error: Invalid JSON received, rejecting message: {body.decode()}", exc_info=True)
-            self.reject_message(method, requeue=False) # Reject message, do not re-queue
+        except json.JSONDecodeError as e:
+            logger.error(f"Failed to decode JSON message. Error: {e}")
+            ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
         except Exception as e:
-            logger.exception(f"[DMS] Unhandled error processing message (attempt {message.get('retries', 1)}/{MAX_RETRIES}): {e}")
-            if message['retries'] < MAX_RETRIES:
-                self.nack_message(method, requeue=True) # Negative acknowledgment, re-queue
+            logger.error(f"An unexpected error occurred: {e}", exc_info=True)
+            if retries < MAX_RETRIES:
+                logger.warning(f"Unexpected error (Attempt {retries}). Re-queueing...")
+                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=True)
             else:
-                logger.critical(f"[DMS] Message failed after {MAX_RETRIES} attempts, sending to DLX: {message}")
-                self.nack_message(method, requeue=False) # Negative acknowledgment, send to DLX
+                logger.error(f"Unexpected error after {MAX_RETRIES} attempts. Sending to DLQ.")
+                ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
 
-    def start(self):
+    def start_consuming(self):
         """
-        Starts the DMS adapter, begins consuming messages from its queue.
+        Starts consuming messages from the DMS queue.
         """
         if self.channel:
-            self.start_consuming(self.dms_queue_name, self._process_message)
-        else:
-            logger.error("Failed to initialize DMS Adapter. Check RabbitMQ connection.")
+            self.channel.basic_consume(
+                queue=self.dms_queue_name,
+                on_message_callback=self._process_message,
+                auto_ack=False
+            )
+            logger.info("DMS Adapter is waiting for messages. To exit, press CTRL+C.")
+            try:
+                self.channel.start_consuming()
+            except KeyboardInterrupt:
+                logger.info("Stopping DMS adapter.")
+            finally:
+                self.close()
 
-if __name__ == "__main__":
-    dms_adapter = DMSAdapter()
-    dms_adapter.start()
-    dms_adapter.close()
+if __name__ == '__main__':
+    adapter = DMSAdapter()
+    adapter.start_consuming()
