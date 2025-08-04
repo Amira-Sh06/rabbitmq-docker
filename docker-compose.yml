@@ -1,39 +1,38 @@
+version: '3.8'
+
 services:
   rabbitmq:
-    image: rabbitmq:3-management-alpine # Use image with Management UI
+    image: rabbitmq:3-management-alpine
     container_name: rabbitmq_broker
     ports:
-      - "5672:5672" # AMQP port for clients
-      - "15672:15672" # Port for RabbitMQ Management web interface
-    environment:
-      # These environment variables are used by RabbitMQ to set up the default user
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
-    healthcheck: # RabbitMQ readiness check
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
       interval: 10s
-      timeout: 5s
+      timeout: 10s
       retries: 5
-      start_period: 10s # Give RabbitMQ time to start
 
-  ic_adapter:
+  crm_adapter:
     build:
-      context: . # Build context - current directory
-      dockerfile: Dockerfile_OneC # Specify which Dockerfile to use
-    container_name: ic_adapter_service
-    # Environment variables for the adapter, read via python-dotenv
-    # RABBITMQ_HOST here is 'rabbitmq' because that's the service name in docker-compose
+      context: .
+      dockerfile: Dockerfile_CRM
+    container_name: crm_adapter_service
     environment:
+      # Настройки для реальной CRM
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
       RABBITMQ_USERNAME: guest
       RABBITMQ_PASSWORD: guest
-      FLASK_PORT: 5000
-    ports:
-      - "5000:5000" # Expose Flask service port to the host
+      CREATIO_URL: https://your.real-creatio.com # <-- ОБНОВИ ЭТОТ URL
+      CREATIO_AUTH_URL: /AuthService.svc/Login
+      CREATIO_UPDATE_ORDER_URL: /odata/Order(guid'{order_id}')
+      CREATIO_USERNAME: your_real_username # <-- ОБНОВИ ЭТО ИМЯ ПОЛЬЗОВАТЕЛЯ
+      CREATIO_PASSWORD: your_real_password # <-- ОБНОВИ ЭТОТ ПАРОЛЬ
     depends_on:
       rabbitmq:
-        condition: service_healthy # Start only after RabbitMQ is healthy
+        condition: service_healthy
+    command: python CRMAdapter.py
 
   dms_adapter:
     build:
@@ -48,17 +47,22 @@ services:
     depends_on:
       rabbitmq:
         condition: service_healthy
+    command: python DMSAdapter.py
 
-  crm_adapter:
+  onec_adapter:
     build:
       context: .
-      dockerfile: Dockerfile_CRM
-    container_name: crm_adapter_service
+      dockerfile: Dockerfile_OneC
+    container_name: onec_adapter_service
+    ports:
+      - "5000:5000"
     environment:
       RABBITMQ_HOST: rabbitmq
       RABBITMQ_PORT: 5672
       RABBITMQ_USERNAME: guest
       RABBITMQ_PASSWORD: guest
+      FLASK_PORT: 5000
     depends_on:
       rabbitmq:
         condition: service_healthy
+    command: python OneCAdapter.py
