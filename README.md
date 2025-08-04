@@ -29,10 +29,14 @@ The project consists of several Python-based adapter services, each communicatin
 ├── Dockerfile_DMS       # Dockerfile for the DMS adapter service
 ├── Dockerfile_OneC      # Dockerfile for the 1C adapter service
 ├── OneCAdapter.py       # Adapter for the 1C system (includes Flask HTTP server)
-├── RabbitMQ.py          # Reusable RabbitMQ client class
+├── rabbitmq.py          # Reusable RabbitMQ client class
 ├── README.md            # This file
 └── requirements.txt     # Python dependencies
 ```
+
+### Purpose of `FakeCreatio.py`
+
+Since a real CRM system was not available for this project, `FakeCreatio.py` was created to serve as a mock API endpoint. It mimics the authentication and data update logic of a real CRM, allowing the `CRMAdapter.py` to be fully tested and demonstrated within a self-contained Docker environment. It is an essential component for running the project in a demo setting.
 
 ### System Overview
 
@@ -74,7 +78,7 @@ The project consists of several Python-based adapter services, each communicatin
 
 Ensure you have **Docker** and **Docker Compose** installed.
 
-### Running the Project
+### Running the Production Project
 
 1.  **Clone the repository:**
     ```bash
@@ -82,20 +86,89 @@ Ensure you have **Docker** and **Docker Compose** installed.
     cd EnterpriseSystemIntegration
     ```
 
-2.  **Create a `.env` file:**
-    In the root directory, create a `.env` file and populate it with RabbitMQ connection details and the Flask port. These values are used by `RabbitMQ.py` and `OneCAdapter.py`.
+2.  **Create and configure the `.env` file:**
+    In the root directory, create a `.env` file and configure the connection details for RabbitMQ and the **real CRM system**.
 
     ```
     # .env
+    # RabbitMQ Connection Details
     RABBITMQ_HOST=rabbitmq
     RABBITMQ_PORT=5672
     RABBITMQ_USERNAME=guest
     RABBITMQ_PASSWORD=guest
+
+    # 1C Adapter Details
     FLASK_PORT=5000
+
+    # Real CRM System Connection Details
+    CREATIO_URL=[https://your.real-creatio.com](https://your.real-creatio.com)
+    CREATIO_AUTH_URL=/AuthService.svc/Login
+    CREATIO_UPDATE_ORDER_URL=/odata/Order('{order_id}')
+    CREATIO_USERNAME=your_real_crm_username
+    CREATIO_PASSWORD=your_real_crm_password
     ```
     *Note: `RABBITMQ_HOST` is set to `rabbitmq` because that is the service name defined in `docker-compose.yml` for inter-container communication.*
 
-3.  **Build and run the services:**
+3.  **Adjust the `docker-compose.yml` file:**
+    You must remove the `fake_creatio` service from the `docker-compose.yml` file, as it is no longer needed. Update the `crm_adapter` service to reflect the real CRM's configuration.
+
+    **Example `docker-compose.yml` (without `fake_creatio`):**
+    ```yaml
+    version: '3.8'
+
+    services:
+      rabbitmq:
+        image: rabbitmq:3-management-alpine
+        container_name: rabbitmq_broker
+        ports:
+          - "5672:5672"
+          - "15672:15672"
+        healthcheck:
+          test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+          interval: 10s
+          timeout: 10s
+          retries: 5
+
+      crm_adapter:
+        build:
+          context: .
+          dockerfile: Dockerfile_CRM
+        container_name: crm_adapter_service
+        env_file:
+          - .env
+        depends_on:
+          rabbitmq:
+            condition: service_healthy
+        command: python CRMAdapter.py
+
+      dms_adapter:
+        build:
+          context: .
+          dockerfile: Dockerfile_DMS
+        container_name: dms_adapter_service
+        env_file:
+          - .env
+        depends_on:
+          rabbitmq:
+            condition: service_healthy
+        command: python DMSAdapter.py
+
+      ic_adapter:
+        build:
+          context: .
+          dockerfile: Dockerfile_OneC
+        container_name: ic_adapter_service
+        ports:
+          - "5000:5000"
+        env_file:
+          - .env
+        depends_on:
+          rabbitmq:
+            condition: service_healthy
+        command: python OneCAdapter.py
+    ```
+
+4.  **Build and run the services:**
     Navigate to the root directory of the project (where `docker-compose.yml` is located) in your terminal and run:
 
     ```bash
@@ -106,9 +179,9 @@ Ensure you have **Docker** and **Docker Compose** installed.
     This command will:
     * Build Docker images for the 1C, DMS, and CRM adapters.
     * Start the RabbitMQ broker with its management UI.
-    * Start all three adapter services, which will connect to RabbitMQ.
+    * Start all three adapter services, which will connect to RabbitMQ and the configured external systems.
 
-4.  **Monitor the services:**
+5.  **Monitor the services:**
     * **View logs:** To view logs from all running services in real-time:
         ```bash
         docker compose logs -f
@@ -124,11 +197,9 @@ Ensure you have **Docker** and **Docker Compose** installed.
 
 ### Testing the Integration
 
-Once all services are running, you can test the communication flow:
+Once all services are running, you can test the communication flow. The `curl` commands remain the same, but the `crm_adapter` will now interact with your actual Creatio instance.
 
 1.  **Send a `create_user` request from 1C to DMS:**
-    You can use `curl` or Postman/Insomnia to send a POST request to the 1C adapter's Flask endpoint.
-
     ```bash
     curl -X POST -H "Content-Type: application/json" -d '{
         "request_id": "USER_REQ_001",
@@ -151,47 +222,17 @@ Once all services are running, you can test the communication flow:
     }' http://localhost:5000/send_to_crm
     ```
     * Observe the logs of `ic_adapter` (sending) and `crm_adapter` (receiving and processing).
+    * The CRM adapter will now attempt to authenticate with and update the status in your real CRM system.
     * The CRM adapter might then send a request to the DMS adapter (`crm.request.dms.get_policy_info`), and the DMS adapter will respond.
     * Finally, `crm_adapter` will send an `order_status_updated_response` back to `ic_adapter`.
 
 ---
 
-## How it Works
+## Possible Improvements
 
-1.  **Message Flow:**
-    * **1C Initiates:** The 1C system (simulated by HTTP requests to `OneCAdapter.py`) sends JSON payloads to `/send_to_dms` or `/send_to_crm`.
-    * **1C Adapter Publishes:** `OneCAdapter.py` transforms these HTTP requests into structured messages and publishes them to the `main_exchange` in RabbitMQ with a specific `routing_key` (e.g., `1c.request.dms.create_user`).
-    * **Target Adapters Consume:** The `DMSAdapter` and `CRMAdapter` are subscribed to queues (`dms_queue`, `crm_queue`) that are bound to the `main_exchange` with wildcards (`*.request.dms.#`, `*.request.crm.#`), allowing them to receive relevant messages.
-    * **Processing and Response:** Upon receiving a message, the target adapter processes it (simulating interaction with the actual business system). After processing, it publishes a response message back to the `main_exchange` with a routing key targeting the source system (e.g., `dms.response.1c.user_created`).
-    * **1C Adapter Consumes Responses:** `OneCAdapter.py` also runs a consumer thread (`ICListener`) that listens for messages on the `1c_queue`, which is bound to receive responses from DMS (`dms.response.1c.#`) and CRM (`crm.response.1c.#`). These responses can then be used to update 1C's internal state.
-
-2.  **Dead Letter Queues (DLQs):**
-    * Each primary queue (e.g., `1c_queue`, `dms_queue`, `crm_queue`) has a Dead Letter Exchange (DLX) and a corresponding Dead Letter Queue (DLQ) configured (e.g., `1c_dead_letter_queue`).
-    * If a message consumer fails to process a message (e.g., due to an exception during `_process_message`) and explicitly `nack`s it with `requeue=False`, or if the message reaches its maximum retry limit, it will be routed to its respective DLQ.
-    * This ensures that no messages are lost due to processing failures and provides a mechanism for manual inspection and reprocessing of problematic messages.
-
----
-
-## Future Enhancements
-
-This project serves as a solid foundation, but for a production-grade enterprise integration solution, several key areas can be enhanced:
-
-* **Delayed Retries:** Implement exponential backoff for retries using RabbitMQ's `rabbitmq_delayed_message_exchange` plugin. This allows messages to be re-queued with a delay, preventing a "thundering herd" problem on services that are temporarily failing.
-* **Circuit Breakers:** Implement circuit breaker patterns within the adapters, especially when they communicate with external (simulated) APIs. This prevents repeated calls to services that are known to be failing, preserving system resources and improving overall resilience.
-* **Monitoring and Alerting:**
-    * Integrate with dedicated monitoring tools like **Prometheus** for metrics collection (e.g., message rates, error rates, consumer lag).
-    * Use **Grafana** for dashboarding to visualize RabbitMQ performance and adapter health.
-    * Set up alerts for critical issues (e.g., high number of messages in DLQs, adapter crashes, high error rates from external APIs).
-* **Authentication and Authorization:**
-    * Secure RabbitMQ connections with robust user roles and **SSL/TLS**.
-    * Secure the Flask API endpoints in `OneCAdapter.py` with **API keys**, **OAuth2**, or other strong authentication methods to control access from 1C.
-* **Scalability:**
-    * For higher message loads, consider running multiple instances of each adapter service. Docker Compose can easily scale services (`docker compose up --scale crm_adapter=3`).
-    * For extreme loads or high availability, a **RabbitMQ cluster** might be necessary.
-* **Configuration Management:** For complex production deployments, move beyond `.env` files to more sophisticated configuration management solutions (e.g., Kubernetes ConfigMaps, HashiCorp Vault for secrets, or dedicated configuration services).
-* **Idempotency:** Design all message processing logic to be **idempotent**. This means that an operation can be safely repeated multiple times (e.g., due to retries) without causing unintended side effects (e.g., creating duplicate entries or incorrect state changes).
+* **Idempotency:** Implement idempotency keys in messages to ensure that a message can be processed multiple times (e.g., due to retries) without causing unintended side effects (e.g., creating duplicate entries or incorrect state changes).
 * **Advanced Health Checks:** Implement more sophisticated health checks for adapter services that verify not only if the Flask app is running, but also if it can successfully connect to RabbitMQ and any other necessary external systems.
-* **Message Schema Management:** While `json.loads` is used here, for complex integrations, consider a more robust schema registry and validation mechanism (e.g., Apache Avro, JSON Schema outside of just Pydantic models for cross-language compatibility).
+* **Message Schema Management:** While `json.loads` is used here, for complex integrations, consider a more robust schema registry and validation mechanism (e.g., Apache Avro, JSON Schema).
 * **Error Handling Refinements:** Implement more granular error handling within `_process_message` functions to differentiate between transient errors (requeue with delay) and permanent errors (send to DLQ immediately).
 
 ---
@@ -203,5 +244,6 @@ It served as a hands-on exercise to gain practical experience with Python backen
 This experience has significantly deepened my understanding of inter-system communication, data validation, and error handling in a real-world context.
 
 ---
+
 
 Feel free to explore, modify, and expand this project! Contributions and feedback are welcome.
