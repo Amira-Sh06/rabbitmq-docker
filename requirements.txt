@@ -1,4 +1,6 @@
 pika
-Flask
 python-dotenv
+flask
 requests
+SQLAlchemy
+Flask-SQLAlchemy
