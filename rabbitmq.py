@@ -1,4 +1,3 @@
-# rabbitmq.py
 import pika
 import json
 import os
@@ -169,3 +168,4 @@ class RabbitMQClient:
             self.channel.queue_declare(queue=dl_queue_name, durable=True)
             self.channel.queue_bind(exchange=dl_exchange_name, queue=dl_queue_name, routing_key='#') # '#' catches everything sent to the DLX
             logger.info(f"Dead letter exchange '{dl_exchange_name}' and queue '{dl_queue_name}' declared and bound.")
+
