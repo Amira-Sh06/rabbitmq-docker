@@ -5,10 +5,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем только необходимые файлы для реального адаптера CRM
 COPY rabbitmq.py .
 COPY CRMAdapter.py .
 COPY .env .
 
-# Команда для запуска адаптера
 CMD ["python", "CRMAdapter.py"]
+
